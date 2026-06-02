@@ -1,0 +1,50 @@
+{
+  "required": true,
+  "package": "dev.endless.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "CobWebMixin",
+    "EnderPearlEntityMixin",
+    "EntityMixin",
+    "IFireworkRocketEntityAccessor",
+    "MixinClientConnection",
+    "ScoreboardMixin",
+    "TeamMixin",
+    "TextVisitFactoryMixin"
+  ],
+  "client": [
+    "AbstractClientPlayerEntityMixin",
+    "BlockMixin",
+    "CameraMixin",
+    "ChatHudMixin",
+    "ChatInputSuggestorMixin",
+    "ChatScreenMixin",
+    "ClientPlayerEntityMixin",
+    "ClientPlayerInteractionManagerMixin",
+    "ClientPlayNetworkHandlerMixin",
+    "EntityRendererMixin",
+    "FireworkRocketEntityMixin",
+    "FogMixin",
+    "GameRendererMixin",
+    "HandledScreenMixin",
+    "HeldItemRendererMixin",
+    "InGameHudMixin",
+    "InGameOverlayRendererMixin",
+    "InventoryScreenMixin",
+    "ItemEntityRendererMixin",
+    "KeyboardInputMixin",
+    "KeyboardMixin",
+    "LivingEntityMixin",
+    "LivingEntityRendererMixin",
+    "MinecraftClientMixin",
+    "IMinecraftClientAccessor",
+    "MouseMixin",
+    "PlayerEntityMixin",
+    "ScreenMixin",
+    "TitleScreenMixin",
+    "WorldMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "vertex": "minecraft:core/sampler_texture/sampler_texture",
+  "fragment": "minecraft:core/sampler_texture/sampler_texture",
+  "attributes": [],
+  "samplers": [
+    { "name": "Sampler0" }
+  ],
+  "uniforms": [
+    { "name": "ModelViewMat", "type": "matrix4x4", "count": 16, "values": [ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0 ] },
+    { "name": "ProjMat", "type": "matrix4x4", "count": 16, "values": [ 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0 ] },
+    { "name": "color", "type": "float", "count": 4, "values": [ 1.0, 1.0, 1.0, 1.0 ] },
+    { "name": "size", "type": "float", "count": 2, "values": [ 1.0, 1.0 ] },
+    { "name": "location", "type": "float", "count": 2, "values": [ 1.0, 1.0 ] },
+    { "name": "texSize", "type": "float", "count": 2, "values": [ 1.0, 1.0 ] },
+    { "name": "round", "type": "float", "count": 4, "values": [ 1.0, 1.0, 1.0, 1.0 ] }
+  ]
+}

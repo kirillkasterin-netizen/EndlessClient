@@ -1,0 +1,1071 @@
+package dev.endless.ui;
+
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import lombok.Getter;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.text.Text;
+import net.minecraft.util.math.MathHelper;
+import org.lwjgl.glfw.GLFW;
+import dev.endless.Endless;
+import dev.endless.module.Module;
+import dev.endless.module.ModuleCategory;
+import dev.endless.module.settings.*;
+import dev.endless.ui.component.Component;
+import dev.endless.ui.component.impl.*;
+import dev.endless.util.IMinecraft;
+import dev.endless.util.cursor.CursorManager;
+import dev.endless.util.render.helper.HoverUtil;
+import dev.endless.util.render.math.Animation;
+import dev.endless.util.render.math.Easing;
+import dev.endless.util.render.math.Scissor;
+import dev.endless.util.render.msdf.Fonts;
+import dev.endless.util.render.providers.ColorProvider;
+import dev.endless.util.render.renderers.DrawUtil;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@Getter
+public class CSGOClickGui extends Screen implements IMinecraft {
+
+    // Отдельный enum для вкладок CS:GO GUI (включает модули + конфиги + темы)
+    private enum CSGOTab {
+        COMBAT, MOVEMENT, RENDER, PLAYER, MISC, CONFIGS, THEMES
+    }
+
+    private CSGOTab selectedTab = CSGOTab.COMBAT;
+    private final Map<Module, List<Component>> moduleComponents = new HashMap<>();
+    private final Map<Module, Animation> enabledAnimations = new HashMap<>();
+    
+    private float scrollOffset = 0;
+    private float targetScrollOffset = 0;
+    
+    // Для биндинга
+    private Module bindingModule = null;
+    private boolean isBinding = false;
+    private BooleanSetting bindingSetting = null; // Для биндинга настроек
+    
+    // Поиск
+    private String searchText = "";
+    private boolean searchFocused = false;
+    
+    public CSGOClickGui() {
+        super(Text.of("CSGO ClickGui"));
+    }
+
+    private int accent(int alpha) {
+        return ColorProvider.setAlpha(ColorProvider.getColorClient(), alpha);
+    }
+
+    private int accentSoft(int alpha) {
+        return ColorProvider.setAlpha(ColorProvider.brighter(ColorProvider.getColorClient(), 0.65f), alpha);
+    }
+
+    @Override
+    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+        CursorManager.reset();
+        CursorManager.resetIBeam();
+        CursorManager.resetClick();
+
+        int windowWidth = mc.getWindow().getScaledWidth();
+        int windowHeight = mc.getWindow().getScaledHeight();
+
+        // Фон
+        DrawUtil.drawRound(0, 0, windowWidth, windowHeight, 0, ColorProvider.rgba(15, 15, 20, 200));
+
+        // Размеры компактного GUI
+        float totalWidth = 500;
+        float totalHeight = 350;
+        float guiX = (windowWidth - totalWidth) / 2;
+        float guiY = (windowHeight - totalHeight) / 2;
+
+        // Единый блюр для всего GUI (более прозрачный)
+        DrawUtil.drawRoundBlur(guiX, guiY, totalWidth, totalHeight, 8, ColorProvider.rgba(75, 75, 75, 180), 18);
+        DrawUtil.drawRound(guiX, guiY, totalWidth, totalHeight, 8, ColorProvider.rgba(20, 20, 25, 150));
+
+        // Логотип и категории слева
+        float sidebarWidth = 120;
+        renderSidebar(context, guiX, guiY, sidebarWidth, totalHeight, mouseX, mouseY);
+
+        // Вертикальный разделитель между сайдбаром и модулями (на всю высоту)
+        float separatorX = guiX + sidebarWidth;
+        DrawUtil.drawRound(separatorX, guiY, 1, totalHeight, 0, ColorProvider.rgba(60, 60, 70, 150));
+
+        // Модули в центре (2 колонки с настройками)
+        float modulesX = guiX + sidebarWidth;
+        float modulesWidth = totalWidth - sidebarWidth;
+        
+        // Убрал дополнительный блюр - теперь только общий блюр для всего GUI
+        
+        renderModules(context, modulesX, guiY, modulesWidth, totalHeight, mouseX, mouseY, delta);
+
+        // Курсор
+        long window = mc.getWindow().getHandle();
+        if (CursorManager.shouldBeHand()) GLFW.glfwSetCursor(window, GLFW.glfwCreateStandardCursor(GLFW.GLFW_HAND_CURSOR));
+        else if (CursorManager.shouldIBeam()) GLFW.glfwSetCursor(window, GLFW.glfwCreateStandardCursor(GLFW.GLFW_IBEAM_CURSOR));
+        else if (CursorManager.shouldClick()) GLFW.glfwSetCursor(window, GLFW.glfwCreateStandardCursor(GLFW.GLFW_POINTING_HAND_CURSOR));
+        else GLFW.glfwSetCursor(window, GLFW.glfwCreateStandardCursor(GLFW.GLFW_ARROW_CURSOR));
+    }
+
+    private void renderSidebar(DrawContext context, float x, float y, float width, float height, int mouseX, int mouseY) {
+        // Логотип ENDLESS (только текст, без куба)
+        float logoY = y + 15;
+        renderLogo(context, x + width / 2, logoY);
+
+        // Горизонтальная линия под логотипом (на всю ширину сайдбара, на той же высоте что и в модулях)
+        DrawUtil.drawRound(x, logoY + 18, width, 1, 0, ColorProvider.rgba(60, 60, 70, 150));
+
+        // Категории
+        float categoryY = logoY + 30;
+        float categoryHeight = 28;
+        float categorySpacing = 4;
+
+        CSGOTab[] tabs = CSGOTab.values();
+        for (CSGOTab tab : tabs) {
+            boolean isSelected = tab == selectedTab;
+            boolean isHovered = HoverUtil.isHovered(mouseX, mouseY, x + 8, categoryY, width - 16, categoryHeight);
+
+            if (isHovered) CursorManager.requestHand();
+
+            // Светящаяся полоска слева для выбранной категории
+            if (isSelected) {
+                float barWidth = 3;
+                float barHeight = categoryHeight - 4;
+                float barX = x + 6;
+                float barY = categoryY + 2;
+                
+                // Блюр для свечения
+                DrawUtil.drawRoundBlur(barX, barY, barWidth, barHeight, 1.5f, accentSoft(255), 8);
+                // Сама полоска
+                DrawUtil.drawRound(barX, barY, barWidth, barHeight, 1.5f, accent(255));
+            }
+
+            // Фон категории
+            int bgColor = isSelected ? 
+                ColorProvider.setAlpha(ColorProvider.getColorClient(), 180) : 
+                (isHovered ? ColorProvider.rgba(40, 40, 50, 150) : ColorProvider.rgba(30, 30, 35, 100));
+            
+            DrawUtil.drawRound(x + 8, categoryY, width - 16, categoryHeight, 5, bgColor);
+
+            // Иконка категории
+            String icon = getTabIcon(tab);
+            int iconColor = isSelected ? accentSoft(255) : ColorProvider.rgba(150, 150, 160, 255);
+            DrawUtil.drawText(Fonts.ICONS_MINCED.get(), icon, x + 16, categoryY + 9, iconColor, 9);
+
+            // Название категории
+            String tabName = getTabName(tab);
+            int textColor = isSelected ? ColorProvider.rgba(255, 255, 255, 255) : ColorProvider.rgba(180, 180, 190, 255);
+            DrawUtil.drawText(Fonts.SFMEDIUM.get(), tabName, x + 32, categoryY + 9, textColor, 7);
+
+            categoryY += categoryHeight + categorySpacing;
+        }
+    }
+
+    private void renderSearch(DrawContext context, float x, float y, float width, float height, int mouseX, int mouseY) {
+        boolean isHovered = HoverUtil.isHovered(mouseX, mouseY, x, y, width, height);
+        if (isHovered) CursorManager.requestIBeam();
+
+        // Фон поиска
+        DrawUtil.drawRound(x, y, width, height, 4, ColorProvider.rgba(25, 25, 30, 200));
+
+        // Иконка поиска
+        float iconBoxW = 17f;
+        DrawUtil.drawRound(x, y, iconBoxW, height, 4, ColorProvider.rgba(35, 35, 40, 150));
+        
+        float iconW = Fonts.ICONS_MINCED.get().getWidth("l", 9f);
+        float iconX = x + (iconBoxW - iconW) / 2f + 1f;
+        float iconY = y + (height / 2f) - 4f;
+        DrawUtil.drawText(Fonts.ICONS_MINCED.get(), "l", iconX, iconY, ColorProvider.rgba(150, 150, 160, 200), 9f);
+
+        // Текст поиска
+        String textToDraw = searchText.isEmpty() && !searchFocused ? "Search..." : searchText;
+        String cursor = searchFocused && System.currentTimeMillis() % 1000 > 500 ? "|" : "";
+        int textColor = searchText.isEmpty() && !searchFocused
+                ? ColorProvider.rgba(120, 120, 130, 255)
+                : ColorProvider.rgba(200, 200, 210, 255);
+
+        DrawUtil.drawText(Fonts.SFREGULAR.get(), textToDraw + cursor, x + iconBoxW + 4f, y + (height / 2f) - 3.5f, textColor, 6.5f);
+    }
+
+    private void renderLogo(DrawContext context, float x, float y) {
+        float textSize = 12f;
+        float logoSize = 12f;
+        
+        String textWR = "WR";
+        String textITH = "ITH";
+        
+        float wrWidth = Fonts.SFBOLD.get().getWidth(textWR, textSize);
+        float ithWidth = Fonts.SFBOLD.get().getWidth(textITH, textSize);
+        
+        float totalWidth = wrWidth + logoSize + 2 + ithWidth;
+        
+        float startX = x - totalWidth / 2;
+        float textY = y;
+        
+        int themeColor = ColorProvider.getColorClient();
+        
+        DrawUtil.drawText(Fonts.SFBOLD.get(), textWR, startX, textY, themeColor, textSize);
+        
+        float logoX = startX + wrWidth + 1;
+        float logoY = textY - 1;
+        
+        net.minecraft.util.Identifier logoTexture = net.minecraft.util.Identifier.of("mre", "images/logo.png");
+        int logoTexId = mc.getTextureManager().getTexture(logoTexture).getGlId();
+        
+        dev.endless.util.render.builders.Builder.texture()
+                .size(new dev.endless.util.render.builders.states.SizeState(logoSize, logoSize))
+                .radius(dev.endless.util.render.builders.states.QuadRadiusState.NO_ROUND)
+                .color(new dev.endless.util.render.builders.states.QuadColorState(themeColor))
+                .texture(0f, 0f, 1f, 1f, logoTexId)
+                .smoothness(1f)
+                .build()
+                .render(context.getMatrices().peek().getPositionMatrix(), logoX, logoY);
+        
+        float ithX = logoX + logoSize + 1;
+        DrawUtil.drawText(Fonts.SFBOLD.get(), textITH, ithX, textY, themeColor, textSize);
+    }
+
+    private void renderModules(DrawContext context, float x, float y, float width, float height, int mouseX, int mouseY, float delta) {
+        // Верхняя панель (поиск + кнопки)
+        float topBarH = 28f;
+        DrawUtil.drawRound(x + 10, y + 10, width - 20, topBarH, 6f, ColorProvider.rgba(25, 25, 30, 180));
+
+        // Поиск
+        float searchW = Math.min(220f, width - 120);
+        float searchH = 18f;
+        float searchX = x + 18;
+        float searchY = y + 15;
+        renderSearch(context, searchX, searchY, searchW, searchH, mouseX, mouseY);
+
+        // Кнопки справа (визуально, без логики)
+        float btnSize = 18f;
+        float btnY = y + 15;
+        float btn2X = x + width - 18 - btnSize;
+        float btn1X = btn2X - 6 - btnSize;
+        DrawUtil.drawRound(btn1X, btnY, btnSize, btnSize, 5f, ColorProvider.rgba(35, 35, 40, 150));
+        DrawUtil.drawRound(btn2X, btnY, btnSize, btnSize, 5f, ColorProvider.rgba(35, 35, 40, 150));
+        DrawUtil.drawText(Fonts.ICONS_MINCED.get(), "p", btn1X + 5.5f, btnY + 6.5f, ColorProvider.rgba(170, 170, 180, 220), 8.5f);
+        DrawUtil.drawText(Fonts.ICONS_MINCED.get(), "m", btn2X + 5.5f, btnY + 6.5f, ColorProvider.rgba(170, 170, 180, 220), 8.5f);
+
+        // Заголовок таба
+        String tabName = getTabName(selectedTab);
+        DrawUtil.drawText(Fonts.SFBOLD.get(), tabName, x + 10, y + 48, accentSoft(255), 10);
+
+        float titleWidth = Fonts.SFBOLD.get().getWidth(tabName, 10);
+        DrawUtil.drawRound(x + 10, y + 61, titleWidth, 1.5f, 0.75f, accent(255));
+
+        // Горизонтальная линия под заголовком
+        DrawUtil.drawRound(x, y + 66, width, 1, 0, ColorProvider.rgba(60, 60, 70, 150));
+
+        // Специальный рендеринг для Configs и Themes
+        if (selectedTab == CSGOTab.CONFIGS) {
+            renderConfigs(context, x, y, width, height, mouseX, mouseY);
+            return;
+        } else if (selectedTab == CSGOTab.THEMES) {
+            renderThemes(context, x, y, width, height, mouseX, mouseY);
+            return;
+        }
+
+        // Конвертируем CSGOTab в ModuleCategory для получения модулей
+        ModuleCategory category = tabToCategory(selectedTab);
+        if (category == null) return;
+
+        // Модули в 2 колонки с настройками
+        List<Module> modules = Endless.getInstance().getModuleStorage().get(category);
+        
+        float startY = y + 73;
+        float moduleWidth = (width - 30) / 2;
+        float moduleHeight = 19;
+        float moduleSpacing = 3.5f;
+        float columnSpacing = 10;
+
+        scrollOffset += (targetScrollOffset - scrollOffset) * 0.2f;
+        
+        // Вычисляем высоты для каждой колонки
+        float[] columnHeights = new float[2];
+        columnHeights[0] = 0;
+        columnHeights[1] = 0;
+        
+        Scissor.push();
+        Scissor.setFromComponentCoordinates(x, y + 73, width, height - 83);
+        
+        for (int i = 0; i < modules.size(); i++) {
+            Module module = modules.get(i);
+            
+            // Фильтрация по поиску
+            if (!searchText.isEmpty() && !module.getName().toLowerCase().contains(searchText.toLowerCase())) {
+                continue;
+            }
+            
+            // Инициализация компонентов
+            if (!moduleComponents.containsKey(module)) {
+                ObjectArrayList<Component> components = new ObjectArrayList<>();
+                for (Setting setting : module.getSettings()) {
+                    switch (setting) {
+                        case BooleanSetting option -> components.add(new BooleanComponent(option));
+                        case ModeSetting option -> components.add(new ModeComponent(option));
+                        case ModeListSetting option -> components.add(new ModeListComponent(option));
+                        case SliderSetting option -> components.add(new SliderComponent(option));
+                        case BindSetting option -> components.add(new BindComponent(option));
+                        case ThemeSetting option -> components.add(new ThemeComponent(option));
+                        case ColorSetting option -> components.add(new ColorPickerComponent(option));
+                        default -> {}
+                    }
+                }
+                moduleComponents.put(module, components);
+            }
+            
+            if (!enabledAnimations.containsKey(module)) {
+                enabledAnimations.put(module, new Animation(Easing.QUINTIC_OUT, 400));
+            }
+            
+            Animation enabledAnim = enabledAnimations.get(module);
+            enabledAnim.run(module.isEnabled());
+            
+            List<Component> components = moduleComponents.get(module);
+            
+            // Определяем в какую колонку поместить модуль (в более короткую)
+            int col = columnHeights[0] <= columnHeights[1] ? 0 : 1;
+            
+            float currentX = x + 10 + (col * (moduleWidth + columnSpacing));
+            float currentY = startY + columnHeights[col] - scrollOffset;
+            
+            // Вычисляем высоту с настройками
+            float settingsHeight = 0;
+            for (Component component : components) {
+                component.getAlphaAnimSetting().run(component.isVisible());
+                float visibleProgress = MathHelper.clamp(component.getAlphaAnimSetting().getValue(), 0f, 1f);
+                if (component.isVisible() || visibleProgress > 0f) {
+                    settingsHeight += component.getHeight() * visibleProgress;
+                }
+            }
+            
+            float totalModuleHeight = moduleHeight + settingsHeight;
+            
+            // Обновляем высоту колонки
+            columnHeights[col] += totalModuleHeight + moduleSpacing;
+            
+            // Проверка видимости
+            if (currentY + totalModuleHeight < y + 73 || currentY > y + height - 10) {
+                continue;
+            }
+
+            boolean isHovered = HoverUtil.isHovered(mouseX, mouseY, currentX, currentY, moduleWidth, moduleHeight);
+            
+            if (isHovered) CursorManager.requestHand();
+
+            // Фон модуля
+            int textColor = ColorProvider.interpolateColor(
+                    ColorProvider.rgba(180, 180, 190, 255),
+                    ColorProvider.rgba(255, 255, 255, 255),
+                    enabledAnim.getValue()
+            );
+
+            int innerColor = ColorProvider.interpolateColor(
+                    ColorProvider.rgba(30, 30, 35, 80),
+                    ColorProvider.setAlpha(ColorProvider.getColorClient(), 150),
+                    enabledAnim.getValue()
+            );
+            
+            DrawUtil.drawRound(currentX, currentY, moduleWidth, totalModuleHeight, 3f, innerColor);
+            
+            // Разделитель снизу модуля
+            if (settingsHeight > 0) {
+                DrawUtil.drawRound(currentX + 3, currentY + moduleHeight - 0.5f, moduleWidth - 6, 1, 0, ColorProvider.rgba(60, 60, 70, 100));
+            }
+
+            // Название
+            DrawUtil.drawText(Fonts.SFREGULAR.get(), module.getName(), currentX + 4.5f, currentY + 5.25f, textColor, 7.5f);
+
+            // Квадратик с буквой бинда справа от названия
+            float bindBoxSize = 14;
+            float bindBoxX = currentX + moduleWidth - bindBoxSize - 30; // Место для ползунка
+            float bindBoxY = currentY + 2.5f;
+            
+            if (module.getKey() != -1) {
+                // Есть бинд - показываем квадратик с буквой
+                boolean bindHovered = HoverUtil.isHovered(mouseX, mouseY, bindBoxX, bindBoxY, bindBoxSize, bindBoxSize);
+                if (bindHovered) CursorManager.requestHand();
+                
+                int bindBgColor = isBinding && bindingModule == module && bindingSetting == null
+                    ? ColorProvider.rgba(255, 200, 100, 150) // Оранжевый при биндинге
+                    : ColorProvider.setAlpha(ColorProvider.getColorClient(), 120);
+                
+                DrawUtil.drawRound(bindBoxX, bindBoxY, bindBoxSize, bindBoxSize, 2, bindBgColor);
+                
+                String keyName = dev.endless.util.keyboard.KeyStorage.getKey(module.getKey());
+                if (keyName != null && !keyName.isEmpty()) {
+                    // Берем первую букву или цифру
+                    String displayKey = keyName.length() > 3 ? keyName.substring(0, 1) : keyName;
+                    float keyWidth = Fonts.SFREGULAR.get().getWidth(displayKey, 6f);
+                    DrawUtil.drawText(Fonts.SFREGULAR.get(), displayKey, 
+                        bindBoxX + (bindBoxSize - keyWidth) / 2, bindBoxY + 4, 
+                        ColorProvider.rgba(255, 255, 255, 255), 6f);
+                }
+            } else if (isBinding && bindingModule == module && bindingSetting == null) {
+                // Биндинг без бинда - показываем пустой квадратик
+                DrawUtil.drawRound(bindBoxX, bindBoxY, bindBoxSize, bindBoxSize, 2, ColorProvider.rgba(255, 200, 100, 150));
+                DrawUtil.drawText(Fonts.SFREGULAR.get(), "?", bindBoxX + 4, bindBoxY + 4, ColorProvider.rgba(255, 255, 255, 255), 6f);
+            }
+
+            // Ползунок (toggle switch) для включения/выключения
+            float toggleW = 24;
+            float toggleH = 12;
+            float toggleX = currentX + moduleWidth - toggleW - 4;
+            float toggleY = currentY + 3.5f;
+            
+            boolean toggleHovered = HoverUtil.isHovered(mouseX, mouseY, toggleX, toggleY, toggleW, toggleH);
+            if (toggleHovered) CursorManager.requestHand();
+            
+            float toggleAnim = (float) enabledAnim.getValue();
+            
+            // Фон ползунка
+            int toggleBgColor = ColorProvider.interpolateColor(
+                ColorProvider.rgba(40, 40, 45, 200),
+                ColorProvider.setAlpha(ColorProvider.getColorClient(), 200),
+                toggleAnim
+            );
+            DrawUtil.drawRound(toggleX, toggleY, toggleW, toggleH, toggleH / 2, toggleBgColor);
+            
+            // Кружок ползунка
+            float circleSize = toggleH - 4;
+            float circleX = toggleX + 2 + (toggleW - circleSize - 4) * toggleAnim;
+            float circleY = toggleY + 2;
+            DrawUtil.drawRound(circleX, circleY, circleSize, circleSize, circleSize / 2, ColorProvider.rgba(255, 255, 255, 255));
+            
+            // Индикатор бинда (без иконки, только подсказка при биндинге)
+            if (isBinding && bindingModule == module && bindingSetting == null) {
+                // Подсказка "Press key..." для модуля
+                String hint = "Press key...";
+                float hintWidth = Fonts.SFREGULAR.get().getWidth(hint, 6f);
+                float hintX = currentX + (moduleWidth - hintWidth) / 2;
+                float hintY = currentY - 12;
+                
+                DrawUtil.drawRound(hintX - 3, hintY - 2, hintWidth + 6, 10, 2, ColorProvider.rgba(20, 20, 25, 230));
+                DrawUtil.drawText(Fonts.SFREGULAR.get(), hint, hintX, hintY, ColorProvider.rgba(255, 200, 100, 255), 6f);
+            }
+
+            // Рендер настроек
+            if (!components.isEmpty()) {
+                float compY = currentY + 17.5f;
+                
+                // Темный фон для настроек
+                float darkHeight = settingsHeight;
+                if (darkHeight > 0) {
+                    DrawUtil.drawRound(currentX + 1f, currentY + 19, moduleWidth - 2f, darkHeight, 0f, ColorProvider.rgba(0, 0, 0, 30));
+                }
+                
+                for (Component component : components) {
+                    component.getAlphaAnim().setValue(1);
+
+                    float visibleProgress = MathHelper.clamp(component.getAlphaAnimSetting().getValue(), 0f, 1f);
+                    if (component.isVisible() || visibleProgress > 0) {
+                        component.setX(currentX);
+                        component.setY(compY);
+                        component.setWidth(moduleWidth - 4);
+
+                        component.render(context.getMatrices(), mouseX, mouseY, delta);
+                        
+                        // Подсказка для биндинга настройки
+                        if (component instanceof BooleanComponent boolComp) {
+                            BooleanSetting setting = boolComp.setting;
+                            if (isBinding && bindingSetting == setting) {
+                                String hint = "Press key...";
+                                float hintWidth = Fonts.SFREGULAR.get().getWidth(hint, 6f);
+                                float hintX = currentX + (moduleWidth - hintWidth) / 2;
+                                float hintY = compY - 10;
+                                
+                                DrawUtil.drawRound(hintX - 3, hintY - 2, hintWidth + 6, 10, 2, ColorProvider.rgba(20, 20, 25, 230));
+                                DrawUtil.drawText(Fonts.SFREGULAR.get(), hint, hintX, hintY, ColorProvider.rgba(255, 200, 100, 255), 6f);
+                            }
+                        }
+
+                        compY += component.getHeight() * visibleProgress;
+                    }
+                }
+            }
+        }
+        
+        Scissor.unset();
+        Scissor.pop();
+    }
+
+    private void renderConfigs(DrawContext context, float x, float y, float width, float height, int mouseX, int mouseY) {
+        float startY = y + 73;
+        float itemWidth = width - 20;
+        float itemHeight = 30;
+        float itemSpacing = 5;
+
+        scrollOffset += (targetScrollOffset - scrollOffset) * 0.2f;
+
+        Scissor.push();
+        Scissor.setFromComponentCoordinates(x, y + 73, width, height - 83);
+
+        List<String> configs = dev.endless.util.config.ConfigManager.getConfigs();
+        
+        float currentY = startY - scrollOffset;
+        
+        for (String config : configs) {
+            if (currentY + itemHeight < y + 73 || currentY > y + height - 10) {
+                currentY += itemHeight + itemSpacing;
+                continue;
+            }
+
+            boolean isHovered = HoverUtil.isHovered(mouseX, mouseY, x + 10, currentY, itemWidth, itemHeight);
+            if (isHovered) CursorManager.requestHand();
+
+            int bgColor = isHovered
+                    ? ColorProvider.setAlpha(ColorProvider.getColorClient(), 120)
+                    : ColorProvider.rgba(30, 30, 35, 80);
+            DrawUtil.drawRound(x + 10, currentY, itemWidth, itemHeight, 5, bgColor);
+
+            // Иконка конфига
+            DrawUtil.drawText(Fonts.ICONS_MINCED.get(), "f", x + 18, currentY + 10, accentSoft(255), 9);
+
+            // Название конфига
+            DrawUtil.drawText(Fonts.SFMEDIUM.get(), config, x + 35, currentY + 10, ColorProvider.rgba(255, 255, 255, 255), 8);
+
+            // Кнопки Load/Save
+            float buttonWidth = 40;
+            float buttonHeight = 18;
+            float buttonY = currentY + 6;
+            
+            // Load button
+            float loadX = x + itemWidth - 90;
+            boolean loadHovered = HoverUtil.isHovered(mouseX, mouseY, loadX, buttonY, buttonWidth, buttonHeight);
+            if (loadHovered) CursorManager.requestHand();
+            DrawUtil.drawRound(loadX, buttonY, buttonWidth, buttonHeight, 4,
+                    loadHovered ? ColorProvider.setAlpha(ColorProvider.getColorButton(), 200) : ColorProvider.setAlpha(ColorProvider.getColorInactiveButton(), 150));
+            DrawUtil.drawText(Fonts.SFREGULAR.get(), "Load", loadX + 10, buttonY + 5, ColorProvider.rgba(255, 255, 255, 255), 7);
+
+            // Save button
+            float saveX = x + itemWidth - 45;
+            boolean saveHovered = HoverUtil.isHovered(mouseX, mouseY, saveX, buttonY, buttonWidth, buttonHeight);
+            if (saveHovered) CursorManager.requestHand();
+            DrawUtil.drawRound(saveX, buttonY, buttonWidth, buttonHeight, 4,
+                    saveHovered ? ColorProvider.setAlpha(ColorProvider.getColorButton(), 200) : ColorProvider.setAlpha(ColorProvider.getColorInactiveButton(), 150));
+            DrawUtil.drawText(Fonts.SFREGULAR.get(), "Save", saveX + 10, buttonY + 5, ColorProvider.rgba(255, 255, 255, 255), 7);
+
+            currentY += itemHeight + itemSpacing;
+        }
+
+        Scissor.unset();
+        Scissor.pop();
+    }
+
+    private void renderThemes(DrawContext context, float x, float y, float width, float height, int mouseX, int mouseY) {
+        float startY = y + 73;
+        float itemWidth = (width - 30) / 2;
+        float itemHeight = 50;
+        float itemSpacing = 5;
+        float columnSpacing = 10;
+
+        scrollOffset += (targetScrollOffset - scrollOffset) * 0.2f;
+
+        Scissor.push();
+        Scissor.setFromComponentCoordinates(x, y + 73, width, height - 83);
+
+        // Получаем темы из Interface модуля
+        Module interfaceModule = Endless.getInstance().getModuleStorage().get("Interface");
+        if (interfaceModule == null) {
+            Scissor.unset();
+            Scissor.pop();
+            return;
+        }
+
+        ThemeSetting themeSetting = null;
+        for (Setting setting : interfaceModule.getSettings()) {
+            if (setting instanceof ThemeSetting ts) {
+                themeSetting = ts;
+                break;
+            }
+        }
+
+        if (themeSetting == null) {
+            Scissor.unset();
+            Scissor.pop();
+            return;
+        }
+
+        dev.endless.module.settings.impl.Theme[] themesArray = themeSetting.getThemes();
+        List<dev.endless.module.settings.impl.Theme> themes = java.util.Arrays.asList(themesArray);
+        
+        int col = 0;
+        int row = 0;
+        
+        for (dev.endless.module.settings.impl.Theme theme : themes) {
+            float currentX = x + 10 + (col * (itemWidth + columnSpacing));
+            float currentY = startY + (row * (itemHeight + itemSpacing)) - scrollOffset;
+
+            if (currentY + itemHeight < y + 73 || currentY > y + height - 10) {
+                col++;
+                if (col >= 2) {
+                    col = 0;
+                    row++;
+                }
+                continue;
+            }
+
+            boolean isSelected = themeSetting.getValue() == theme;
+            boolean isHovered = HoverUtil.isHovered(mouseX, mouseY, currentX, currentY, itemWidth, itemHeight);
+            if (isHovered) CursorManager.requestHand();
+
+            int bgColor = isSelected
+                    ? ColorProvider.setAlpha(ColorProvider.getColorClient(), 150)
+                    : (isHovered ? ColorProvider.setAlpha(ColorProvider.getColorClient(), 100) : ColorProvider.rgba(30, 30, 35, 80));
+            DrawUtil.drawRound(currentX, currentY, itemWidth, itemHeight, 5, bgColor);
+
+            // Иконка темы
+            DrawUtil.drawText(Fonts.ICONS_MINCED.get(), "n", currentX + 8, currentY + 10, accentSoft(255), 9);
+
+            // Название темы
+            DrawUtil.drawText(Fonts.SFMEDIUM.get(), theme.name, currentX + 25, currentY + 10, ColorProvider.rgba(255, 255, 255, 255), 8);
+
+            // Цветовая палитра темы
+            float colorSize = 15;
+            float colorY = currentY + 28;
+            float colorX = currentX + 8;
+            
+            DrawUtil.drawRound(colorX, colorY, colorSize, colorSize, 3, theme.getColorFirst());
+            DrawUtil.drawRound(colorX + colorSize + 3, colorY, colorSize, colorSize, 3, theme.getColorSecond());
+
+            col++;
+            if (col >= 2) {
+                col = 0;
+                row++;
+            }
+        }
+
+        Scissor.unset();
+        Scissor.pop();
+    }
+
+    private String getTabIcon(CSGOTab tab) {
+        return switch (tab) {
+            case COMBAT -> "a";
+            case MOVEMENT -> "b";
+            case RENDER -> "c";
+            case PLAYER -> "d";
+            case MISC -> "e";
+            case CONFIGS -> "f";
+            case THEMES -> "n";
+        };
+    }
+
+    private String getTabName(CSGOTab tab) {
+        return switch (tab) {
+            case COMBAT -> "Combat";
+            case MOVEMENT -> "Movement";
+            case RENDER -> "Render";
+            case PLAYER -> "Player";
+            case MISC -> "Misc";
+            case CONFIGS -> "Configs";
+            case THEMES -> "Themes";
+        };
+    }
+
+    private ModuleCategory tabToCategory(CSGOTab tab) {
+        return switch (tab) {
+            case COMBAT -> ModuleCategory.COMBAT;
+            case MOVEMENT -> ModuleCategory.MOVEMENT;
+            case RENDER -> ModuleCategory.RENDER;
+            case PLAYER -> ModuleCategory.PLAYER;
+            case MISC -> ModuleCategory.MISC;
+            default -> null;
+        };
+    }
+
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        int windowWidth = mc.getWindow().getScaledWidth();
+        int windowHeight = mc.getWindow().getScaledHeight();
+
+        float totalWidth = 500;
+        float totalHeight = 350;
+        float guiX = (windowWidth - totalWidth) / 2;
+        float guiY = (windowHeight - totalHeight) / 2;
+
+        float sidebarWidth = 120;
+
+        // Клик по категориям
+        float categoryY = guiY + 15 + 30; // После логотипа
+        float categoryHeight = 28;
+        float categorySpacing = 4;
+
+        // Клик по полю поиска (в верхней панели модулей)
+        float modulesXForSearch = guiX + sidebarWidth;
+        float modulesWidthForSearch = totalWidth - sidebarWidth;
+        float searchW = Math.min(220f, modulesWidthForSearch - 120);
+        float searchH = 18f;
+        float searchX = modulesXForSearch + 18;
+        float searchY = guiY + 15;
+        if (HoverUtil.isHovered(mouseX, mouseY, searchX, searchY, searchW, searchH)) {
+            searchFocused = true;
+            return true;
+        } else if (button == 0) {
+            searchFocused = false;
+        }
+
+        CSGOTab[] tabs = CSGOTab.values();
+        for (CSGOTab tab : tabs) {
+            if (HoverUtil.isHovered(mouseX, mouseY, guiX + 8, categoryY, sidebarWidth - 16, categoryHeight)) {
+                selectedTab = tab;
+                targetScrollOffset = 0;
+                scrollOffset = 0;
+                return true;
+            }
+            categoryY += categoryHeight + categorySpacing;
+        }
+
+        // Специальная обработка для Configs
+        if (selectedTab == CSGOTab.CONFIGS) {
+            return handleConfigsClick(mouseX, mouseY, button, guiX, guiY, totalWidth, totalHeight);
+        }
+
+        // Специальная обработка для Themes
+        if (selectedTab == CSGOTab.THEMES) {
+            return handleThemesClick(mouseX, mouseY, button, guiX, guiY, totalWidth, totalHeight);
+        }
+
+        // Конвертируем tab в category
+        ModuleCategory category = tabToCategory(selectedTab);
+        if (category == null) return super.mouseClicked(mouseX, mouseY, button);
+
+        // Клик по модулям и настройкам
+        float modulesX = guiX + sidebarWidth; // ИСПРАВЛЕНО
+        float modulesWidth = totalWidth - sidebarWidth;
+        
+        List<Module> modules = Endless.getInstance().getModuleStorage().get(category);
+        float startY = guiY + 73;
+        float moduleWidth = (modulesWidth - 30) / 2;
+        float moduleHeight = 19;
+        float moduleSpacing = 3.5f;
+        float columnSpacing = 10;
+
+        // Вычисляем высоты для каждой колонки
+        float[] columnHeights = new float[2];
+        columnHeights[0] = 0;
+        columnHeights[1] = 0;
+        
+        for (int i = 0; i < modules.size(); i++) {
+            Module module = modules.get(i);
+            List<Component> components = moduleComponents.get(module);
+            if (components == null) continue;
+            
+            // Определяем в какую колонку поместить модуль
+            int col = columnHeights[0] <= columnHeights[1] ? 0 : 1;
+            
+            float currentX = modulesX + 10 + (col * (moduleWidth + columnSpacing));
+            float currentY = startY + columnHeights[col] - scrollOffset;
+            
+            float settingsHeight = 0;
+            for (Component component : components) {
+                component.getAlphaAnimSetting().run(component.isVisible());
+                float visibleProgress = MathHelper.clamp(component.getAlphaAnimSetting().getValue(), 0f, 1f);
+                if (component.isVisible() || visibleProgress > 0f) {
+                    settingsHeight += component.getHeight() * visibleProgress;
+                }
+            }
+            
+            float totalModuleHeight = moduleHeight + settingsHeight;
+            
+            // Обновляем высоту колонки
+            columnHeights[col] += totalModuleHeight + moduleSpacing;
+            
+            if (currentY + totalModuleHeight < guiY + 73 || currentY > guiY + totalHeight - 10) {
+                continue;
+            }
+
+            // СКМ (колесико мыши) по квадратику с буквой для биндинга
+            float bindBoxSize = 14;
+            float bindBoxX = currentX + moduleWidth - bindBoxSize - 30;
+            float bindBoxY = currentY + 2.5f;
+            
+            if (button == 2 && HoverUtil.isHovered(mouseX, mouseY, bindBoxX, bindBoxY, bindBoxSize, bindBoxSize)) {
+                if (isBinding && bindingModule == module && bindingSetting == null) {
+                    // Отменяем биндинг модуля
+                    isBinding = false;
+                    bindingModule = null;
+                } else {
+                    // Начинаем биндинг модуля
+                    isBinding = true;
+                    bindingModule = module;
+                    bindingSetting = null;
+                }
+                return true;
+            }
+
+            // ЛКМ по ползунку для включения/выключения
+            float toggleW = 24;
+            float toggleH = 12;
+            float toggleX = currentX + moduleWidth - toggleW - 4;
+            float toggleY = currentY + 3.5f;
+            
+            if (button == 0 && HoverUtil.isHovered(mouseX, mouseY, toggleX, toggleY, toggleW, toggleH)) {
+                module.toggle();
+                return true;
+            }
+
+            // ЛКМ по названию модуля тоже включает/выключает
+            float nameWidth = Fonts.SFREGULAR.get().getWidth(module.getName(), 7.5f);
+            if (button == 0 && HoverUtil.isHovered(mouseX, mouseY, currentX + 4.5f, currentY, nameWidth + 10, moduleHeight)) {
+                module.toggle();
+                return true;
+            }
+
+            // Клик по настройкам
+            for (Component component : components) {
+                if (component.isVisible() && component.getAlphaAnimSetting().getValue() > 0.5f) {
+                    // СКМ (колесико мыши) по BooleanSetting для биндинга
+                    if (button == 2 && component instanceof BooleanComponent boolComp) {
+                        BooleanSetting setting = boolComp.setting;
+                        if (HoverUtil.isHovered(mouseX, mouseY, component.getX(), component.getY(), component.getWidth(), component.getHeight())) {
+                            if (isBinding && bindingSetting == setting) {
+                                // Отменяем биндинг настройки
+                                isBinding = false;
+                                bindingModule = null;
+                                bindingSetting = null;
+                            } else {
+                                // Начинаем биндинг настройки
+                                isBinding = true;
+                                bindingModule = module;
+                                bindingSetting = setting;
+                            }
+                            return true;
+                        }
+                    }
+                    
+                    component.mouseClicked(mouseX, mouseY, button);
+                }
+            }
+        }
+
+        return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        for (List<Component> components : moduleComponents.values()) {
+            for (Component component : components) {
+                component.mouseReleased(mouseX, mouseY, button);
+            }
+        }
+        return super.mouseReleased(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        int windowWidth = mc.getWindow().getScaledWidth();
+        int windowHeight = mc.getWindow().getScaledHeight();
+
+        float totalWidth = 500;
+        float guiX = (windowWidth - totalWidth) / 2;
+
+        float modulesX = guiX + 120; // ИСПРАВЛЕНО
+        float modulesWidth = totalWidth - 120;
+
+        if (HoverUtil.isHovered(mouseX, mouseY, modulesX, 0, modulesWidth, windowHeight)) {
+            targetScrollOffset -= (float) verticalAmount * 30;
+            targetScrollOffset = Math.max(0, targetScrollOffset);
+            return true;
+        }
+        
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
+    }
+
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        // Обработка поиска
+        if (searchFocused) {
+            if (keyCode == GLFW.GLFW_KEY_BACKSPACE && !searchText.isEmpty()) {
+                searchText = searchText.substring(0, searchText.length() - 1);
+                return true;
+            }
+            if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_ESCAPE) {
+                searchFocused = false;
+                return true;
+            }
+        }
+        
+        // Обработка биндинга
+        if (isBinding) {
+            if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+                // Отменяем биндинг
+                isBinding = false;
+                bindingModule = null;
+                bindingSetting = null;
+                return true;
+            } else if (keyCode == GLFW.GLFW_KEY_DELETE || keyCode == GLFW.GLFW_KEY_BACKSPACE) {
+                // Удаляем бинд
+                if (bindingSetting != null) {
+                    bindingSetting.setKey(-1);
+                } else if (bindingModule != null) {
+                    bindingModule.setKey(-1);
+                }
+                isBinding = false;
+                bindingModule = null;
+                bindingSetting = null;
+                return true;
+            } else {
+                // Устанавливаем бинд
+                if (bindingSetting != null) {
+                    bindingSetting.setKey(keyCode);
+                } else if (bindingModule != null) {
+                    bindingModule.setKey(keyCode);
+                }
+                isBinding = false;
+                bindingModule = null;
+                bindingSetting = null;
+                return true;
+            }
+        }
+        
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            long window = mc.getWindow().getHandle();
+            GLFW.glfwSetCursor(window, GLFW.glfwCreateStandardCursor(GLFW.GLFW_ARROW_CURSOR));
+        }
+        
+        for (List<Component> components : moduleComponents.values()) {
+            for (Component component : components) {
+                component.keyPressed(keyCode, scanCode, modifiers);
+            }
+        }
+        
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    @Override
+    public boolean charTyped(char chr, int modifiers) {
+        // Обработка ввода в поиск
+        if (searchFocused && searchText.length() < 15) {
+            searchText += chr;
+            return true;
+        }
+        
+        for (List<Component> components : moduleComponents.values()) {
+            for (Component component : components) {
+                if (component instanceof ColorPickerComponent colorPicker) {
+                    // Передаем символ в компонент цвета если нужно
+                }
+            }
+        }
+        return super.charTyped(chr, modifiers);
+    }
+
+    private boolean handleConfigsClick(double mouseX, double mouseY, int button, float guiX, float guiY, float totalWidth, float totalHeight) {
+        if (button != 0) return false;
+
+        float sidebarWidth = 120;
+        float modulesX = guiX + sidebarWidth; // ИСПРАВЛЕНО: убрал +10
+        float modulesWidth = totalWidth - sidebarWidth;
+        
+        float startY = guiY + 73;
+        float itemWidth = modulesWidth - 20;
+        float itemHeight = 30;
+        float itemSpacing = 5;
+
+        List<String> configs = dev.endless.util.config.ConfigManager.getConfigs();
+        
+        float currentY = startY - scrollOffset;
+        
+        for (String config : configs) {
+            if (currentY + itemHeight < guiY + 73 || currentY > guiY + totalHeight - 10) {
+                currentY += itemHeight + itemSpacing;
+                continue;
+            }
+
+            float buttonWidth = 40;
+            float buttonHeight = 18;
+            float buttonY = currentY + 6;
+            
+            // Load button
+            float loadX = modulesX + itemWidth - 90;
+            if (HoverUtil.isHovered(mouseX, mouseY, loadX, buttonY, buttonWidth, buttonHeight)) {
+                dev.endless.util.config.ConfigManager.load(config);
+                return true;
+            }
+
+            // Save button
+            float saveX = modulesX + itemWidth - 45;
+            if (HoverUtil.isHovered(mouseX, mouseY, saveX, buttonY, buttonWidth, buttonHeight)) {
+                dev.endless.util.config.ConfigManager.save(config);
+                return true;
+            }
+
+            currentY += itemHeight + itemSpacing;
+        }
+
+        return false;
+    }
+
+    private boolean handleThemesClick(double mouseX, double mouseY, int button, float guiX, float guiY, float totalWidth, float totalHeight) {
+        if (button != 0) return false;
+
+        float sidebarWidth = 120;
+        float modulesX = guiX + sidebarWidth; // ИСПРАВЛЕНО: убрал +10
+        float modulesWidth = totalWidth - sidebarWidth;
+        
+        float startY = guiY + 73;
+        float itemWidth = (modulesWidth - 30) / 2;
+        float itemHeight = 50;
+        float itemSpacing = 5;
+        float columnSpacing = 10;
+
+        Module interfaceModule = Endless.getInstance().getModuleStorage().get("Interface");
+        if (interfaceModule == null) return false;
+
+        ThemeSetting themeSetting = null;
+        for (Setting setting : interfaceModule.getSettings()) {
+            if (setting instanceof ThemeSetting ts) {
+                themeSetting = ts;
+                break;
+            }
+        }
+
+        if (themeSetting == null) return false;
+
+        dev.endless.module.settings.impl.Theme[] themesArray = themeSetting.getThemes();
+        List<dev.endless.module.settings.impl.Theme> themes = java.util.Arrays.asList(themesArray);
+        
+        int col = 0;
+        int row = 0;
+        
+        for (dev.endless.module.settings.impl.Theme theme : themes) {
+            float currentX = modulesX + 10 + (col * (itemWidth + columnSpacing));
+            float currentY = startY + (row * (itemHeight + itemSpacing)) - scrollOffset;
+
+            if (currentY + itemHeight < guiY + 73 || currentY > guiY + totalHeight - 10) {
+                col++;
+                if (col >= 2) {
+                    col = 0;
+                    row++;
+                }
+                continue;
+            }
+
+            if (HoverUtil.isHovered(mouseX, mouseY, currentX, currentY, itemWidth, itemHeight)) {
+                themeSetting.setValue(theme);
+                System.out.println("Theme selected: " + theme.name); // Отладка
+                return true;
+            }
+
+            col++;
+            if (col >= 2) {
+                col = 0;
+                row++;
+            }
+        }
+
+        return false;
+    }
+
+    @Override
+    public boolean shouldPause() {
+        return false;
+    }
+}
+

@@ -1,0 +1,11 @@
+{
+  "vertex": "minecraft:core/gaussian_blur",
+  "fragment": "minecraft:core/blit_screen",
+  "samplers": [
+    { "name": "Sampler0" }
+  ],
+  "uniforms": [
+    { "name": "scaleMultiplier", "type": "float", "count": 1, "values": [ 1.0 ] },
+    { "name": "offsetDirection", "type": "float", "count": 1, "values": [ 1.0 ] }
+  ]
+}

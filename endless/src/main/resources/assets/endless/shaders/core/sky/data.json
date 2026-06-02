@@ -1,0 +1,19 @@
+{
+    "vertex": "endless:core/sky/vertex",
+    "fragment": "endless:core/sky/fragment",
+    "samplers": [],
+    "uniforms": [
+        { "name": "ModelViewMat", "type": "matrix4x4", "count": 16, "values": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] },
+        { "name": "ProjMat", "type": "matrix4x4", "count": 16, "values": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] },
+        { "name": "iTime", "type": "float", "count": 1, "values": [0.0] },
+        { "name": "iResolution", "type": "float", "count": 2, "values": [1920.0, 1080.0] },
+        { "name": "iSpeed", "type": "float", "count": 1, "values": [1.0] },
+        { "name": "iColor", "type": "float", "count": 3, "values": [1.0, 0.2, 0.35] },
+        { "name": "iColor2", "type": "float", "count": 3, "values": [0.4, 0.0, 0.6] },
+        { "name": "iMode", "type": "int", "count": 1, "values": [0] },
+        { "name": "iYaw", "type": "float", "count": 1, "values": [0.0] },
+        { "name": "iPitch", "type": "float", "count": 1, "values": [0.0] },
+        { "name": "iFov", "type": "float", "count": 1, "values": [1.221730476] },
+        { "name": "iAspect", "type": "float", "count": 1, "values": [1.7777778] }
+    ]
+}
