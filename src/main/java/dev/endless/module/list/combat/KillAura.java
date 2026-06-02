@@ -52,7 +52,7 @@ import dev.endless.util.text.ValueUnit;
 @ModuleInformation(moduleName = "KillAura", moduleCategory = ModuleCategory.COMBAT)
 public class KillAura extends Module {
 
-    public final ModeSetting rotation = new ModeSetting("Ротация", "Old SlothHW", "Old SlothHW", "Neuro", "Funtime", "SpookyNew");
+    public final ModeSetting rotation = new ModeSetting("Ротация", "Old SlothHW", "Old SlothHW", "Neuro", "Funtime", "SpookyDuels", "SpookyAnka");
     public final ModeSetting rotationBehavior = new ModeSetting("Поведение ротации", "Плавная", "Плавная", "Снапы");
     private final ModeListSetting targets = new ModeListSetting("Таргеты",
             new BooleanSetting("Игроки", true),
@@ -110,23 +110,41 @@ public class KillAura extends Module {
     /** Прошлый кадр system time — для расчёта delta-time в frame-step. */
     private long funtimeLastFrameNanos = 0L;
 
-    // ── SpookyNew per-frame rotation state ────────────────────────────────
+    // ── SpookyDuels per-frame rotation state ────────────────────────────────
     /** Текущие углы (обновляются каждый кадр). */
-    private float spookyCurrentYaw = 0f;
-    private float spookyCurrentPitch = 0f;
+    private float spookyDuelsCurrentYaw = 0f;
+    private float spookyDuelsCurrentPitch = 0f;
     /** Целевые углы на центр цели. */
-    private float spookyTargetYaw = 0f;
-    private float spookyTargetPitch = 0f;
+    private float spookyDuelsTargetYaw = 0f;
+    private float spookyDuelsTargetPitch = 0f;
     /** Прошлая цель для определения смены цели. */
-    private LivingEntity spookyPrevTarget = null;
-    /** Активна ли система SpookyNew. */
-    private boolean spookyActive = false;
+    private LivingEntity spookyDuelsPrevTarget = null;
+    /** Активна ли система SpookyDuels. */
+    private boolean spookyDuelsActive = false;
     /** Прошлый кадр system time для delta-time. */
-    private long spookyLastFrameNanos = 0L;
+    private long spookyDuelsLastFrameNanos = 0L;
     /** Фаза кругового движения (радианы) для орбиты вокруг цели. */
-    private float spookyOrbitPhase = 0f;
+    private float spookyDuelsOrbitPhase = 0f;
     /** Находимся ли мы близко к цели (режим стабилизации). */
-    private boolean spookyLocked = false;
+    private boolean spookyDuelsLocked = false;
+
+    // ── SpookyAnka per-frame rotation state ────────────────────────────────
+    /** Текущие углы (обновляются каждый кадр). */
+    private float spookyAnkaCurrentYaw = 0f;
+    private float spookyAnkaCurrentPitch = 0f;
+    /** Целевые углы на центр цели. */
+    private float spookyAnkaTargetYaw = 0f;
+    private float spookyAnkaTargetPitch = 0f;
+    /** Прошлая цель для определения смены цели. */
+    private LivingEntity spookyAnkaPrevTarget = null;
+    /** Активна ли система SpookyAnka. */
+    private boolean spookyAnkaActive = false;
+    /** Прошлый кадр system time для delta-time. */
+    private long spookyAnkaLastFrameNanos = 0L;
+    /** Фаза кругового движения (радианы) для орбиты вокруг цели. */
+    private float spookyAnkaOrbitPhase = 0f;
+    /** Находимся ли мы близко к цели (режим стабилизации). */
+    private boolean spookyAnkaLocked = false;
 
     @Getter
     private LivingEntity target;
@@ -152,9 +170,13 @@ public class KillAura extends Module {
         if (isEnabled() && rotation.is("Funtime") && funtimeActive) {
             updateFuntimePerFrame();
         }
-        // Per-frame обновление SpookyNew ротации.
-        if (isEnabled() && rotation.is("SpookyNew") && spookyActive) {
-            updateSpookyNewPerFrame();
+        // Per-frame обновление SpookyDuels ротации.
+        if (isEnabled() && rotation.is("SpookyDuels") && spookyDuelsActive) {
+            updateSpookyDuelsPerFrame();
+        }
+        // Per-frame обновление SpookyAnka ротации.
+        if (isEnabled() && rotation.is("SpookyAnka") && spookyAnkaActive) {
+            updateSpookyAnkaPerFrame();
         }
         // Лёгкая «доводка» камеры на последнюю цель после выключения KillAura.
         tickDisableTransition();
@@ -231,7 +253,8 @@ public class KillAura extends Module {
             case "Old SlothHW" -> slothTest(target);
             case "Neuro" -> updateNeuroRotation(target);
             case "Funtime" -> updateFuntimeRotation(target);
-            case "SpookyNew" -> updateSpookyNewRotation(target);
+            case "SpookyDuels" -> updateSpookyDuelsRotation(target);
+            case "SpookyAnka" -> updateSpookyAnkaRotation(target);
         }
     }
 
@@ -314,9 +337,12 @@ public class KillAura extends Module {
             // Funtime: цель потеряна, отключаем per-frame обновление.
             funtimeActive = false;
             funtimePrevTarget = null;
-            // SpookyNew: цель потеряна, отключаем per-frame обновление.
-            spookyActive = false;
-            spookyPrevTarget = null;
+            // SpookyDuels: цель потеряна, отключаем per-frame обновление.
+            spookyDuelsActive = false;
+            spookyDuelsPrevTarget = null;
+            // SpookyAnka: цель потеряна, отключаем per-frame обновление.
+            spookyAnkaActive = false;
+            spookyAnkaPrevTarget = null;
         }
     }
 
@@ -722,27 +748,47 @@ public class KillAura extends Module {
 
 
     /**
-     * SpookyNew ротация — onTick часть: активирует систему и готовит целевые углы.
+     * SpookyDuels ротация — onTick часть: активирует систему и готовит целевые углы.
      */
-    private void updateSpookyNewRotation(LivingEntity target) {
+    private void updateSpookyDuelsRotation(LivingEntity target) {
         if (mc.player == null || target == null) return;
 
-        spookyActive = true;
+        spookyDuelsActive = true;
 
         // Инициализация при первом тике
-        if (spookyCurrentYaw == 0 && spookyCurrentPitch == 0) {
-            spookyCurrentYaw = mc.player.getYaw();
-            spookyCurrentPitch = mc.player.getPitch();
+        if (spookyDuelsCurrentYaw == 0 && spookyDuelsCurrentPitch == 0) {
+            spookyDuelsCurrentYaw = mc.player.getYaw();
+            spookyDuelsCurrentPitch = mc.player.getPitch();
         }
 
         // Смена цели — reset для плавного перехода
-        if (target != spookyPrevTarget) {
-            spookyPrevTarget = target;
+        if (target != spookyDuelsPrevTarget) {
+            spookyDuelsPrevTarget = target;
         }
     }
 
     /**
-     * SpookyNew per-frame: вызывается каждый кадр (60+ FPS).
+     * SpookyAnka ротация — onTick часть: активирует систему и готовит целевые углы.
+     */
+    private void updateSpookyAnkaRotation(LivingEntity target) {
+        if (mc.player == null || target == null) return;
+
+        spookyAnkaActive = true;
+
+        // Инициализация при первом тике
+        if (spookyAnkaCurrentYaw == 0 && spookyAnkaCurrentPitch == 0) {
+            spookyAnkaCurrentYaw = mc.player.getYaw();
+            spookyAnkaCurrentPitch = mc.player.getPitch();
+        }
+
+        // Смена цели — reset для плавного перехода
+        if (target != spookyAnkaPrevTarget) {
+            spookyAnkaPrevTarget = target;
+        }
+    }
+
+    /**
+     * SpookyDuels per-frame: вызывается каждый кадр (60+ FPS).
      * Использует плавную линейную интерполяцию (lerp) и сферическую (slerp)
      * для очень быстрой, но плавной ротации.
      * 
@@ -751,22 +797,22 @@ public class KillAura extends Module {
      * 
      * Frame-rate-independent factor: 1 - exp(-speed * dt).
      */
-    private void updateSpookyNewPerFrame() {
+    private void updateSpookyDuelsPerFrame() {
         if (mc.player == null) return;
         LivingEntity tgt = target != null ? target : lastTarget;
         if (tgt == null || !tgt.isAlive()) {
-            spookyActive = false;
-            spookyLocked = false;
+            spookyDuelsActive = false;
+            spookyDuelsLocked = false;
             return;
         }
 
         long now = System.nanoTime();
-        if (spookyLastFrameNanos == 0L) {
-            spookyLastFrameNanos = now;
+        if (spookyDuelsLastFrameNanos == 0L) {
+            spookyDuelsLastFrameNanos = now;
             return;
         }
-        float dt = (now - spookyLastFrameNanos) / 1_000_000_000f; // секунды
-        spookyLastFrameNanos = now;
+        float dt = (now - spookyDuelsLastFrameNanos) / 1_000_000_000f; // секунды
+        spookyDuelsLastFrameNanos = now;
         if (dt <= 0f) return;
         if (dt > 0.1f) dt = 0.1f; // защита от больших скачков
 
@@ -792,46 +838,46 @@ public class KillAura extends Module {
         purePitch = MathHelper.clamp(purePitch, -89f, 89f);
 
         // ── Вычисляем расстояние до цели для определения режима ───────────
-        float yawDiff = Math.abs(MathHelper.wrapDegrees(pureYaw - spookyCurrentYaw));
-        float pitchDiff = Math.abs(purePitch - spookyCurrentPitch);
+        float yawDiff = Math.abs(MathHelper.wrapDegrees(pureYaw - spookyDuelsCurrentYaw));
+        float pitchDiff = Math.abs(purePitch - spookyDuelsCurrentPitch);
         float totalDiff = (float) Math.sqrt(yawDiff * yawDiff + pitchDiff * pitchDiff);
         
         // ── Режим стабилизации: когда мы близко к цели ────────────────────
         // Если мы близко (< 3 градусов) - включаем режим "locked" с минимальным
         // круговым движением для стабильности
-        boolean wasLocked = spookyLocked;
+        boolean wasLocked = spookyDuelsLocked;
         if (totalDiff < 3f) {
-            spookyLocked = true;
+            spookyDuelsLocked = true;
         } else if (totalDiff > 8f) {
-            spookyLocked = false;
+            spookyDuelsLocked = false;
         }
         // Иначе сохраняем предыдущее состояние (гистерезис)
 
         // ── Круговое движение (орбита) вокруг цели ─────────────────────────
         // Фаза орбиты медленно растёт со временем
-        float orbitSpeed = spookyLocked ? 0.8f : 2.5f; // Медленнее когда locked
-        spookyOrbitPhase += orbitSpeed * dt;
+        float orbitSpeed = spookyDuelsLocked ? 0.8f : 2.5f; // Медленнее когда locked
+        spookyDuelsOrbitPhase += orbitSpeed * dt;
         
         // Радиус орбиты зависит от режима
-        float orbitRadius = spookyLocked ? 0.8f : 3.5f; // Меньше когда locked
+        float orbitRadius = spookyDuelsLocked ? 0.8f : 3.5f; // Меньше когда locked
         
         // Добавляем круговое смещение к целевым углам
-        float orbitYawOffset = (float) Math.cos(spookyOrbitPhase) * orbitRadius;
-        float orbitPitchOffset = (float) Math.sin(spookyOrbitPhase * 1.3) * (orbitRadius * 0.4f);
+        float orbitYawOffset = (float) Math.cos(spookyDuelsOrbitPhase) * orbitRadius;
+        float orbitPitchOffset = (float) Math.sin(spookyDuelsOrbitPhase * 1.3) * (orbitRadius * 0.4f);
         
-        spookyTargetYaw = pureYaw + orbitYawOffset;
-        spookyTargetPitch = MathHelper.clamp(purePitch + orbitPitchOffset, -89f, 89f);
+        spookyDuelsTargetYaw = pureYaw + orbitYawOffset;
+        spookyDuelsTargetPitch = MathHelper.clamp(purePitch + orbitPitchOffset, -89f, 89f);
 
         // ── Адаптивная скорость интерполяции ───────────────────────────────
         boolean canAttackReady = Endless.getInstance().getIdealHitUtils().cooldownIsReached(false);
         float baseSpeed;
         
-        if (spookyLocked) {
+        if (spookyDuelsLocked) {
             // В режиме locked - медленная плавная стабилизация
             if (canAttackReady && totalDiff < 2f) {
                 // Готовы атаковать и очень близко - финальный snap точно в центр
-                spookyTargetYaw = pureYaw; // Убираем орбиту для точного удара
-                spookyTargetPitch = purePitch;
+                spookyDuelsTargetYaw = pureYaw; // Убираем орбиту для точного удара
+                spookyDuelsTargetPitch = purePitch;
                 baseSpeed = 35f;
             } else {
                 baseSpeed = 12f; // Медленное следование по орбите
@@ -851,15 +897,15 @@ public class KillAura extends Module {
         float factor = 1f - (float) Math.exp(-baseSpeed * dt);
         
         // Linear interpolation для yaw и pitch
-        float yawDelta = MathHelper.wrapDegrees(spookyTargetYaw - spookyCurrentYaw);
-        float pitchDelta = spookyTargetPitch - spookyCurrentPitch;
+        float yawDelta = MathHelper.wrapDegrees(spookyDuelsTargetYaw - spookyDuelsCurrentYaw);
+        float pitchDelta = spookyDuelsTargetPitch - spookyDuelsCurrentPitch;
 
         // ── Spherical lerp (slerp) для больших углов ──────────────────────
         // Используем slerp только когда НЕ в режиме locked и поворот большой
-        if (!spookyLocked && totalDiff > 15f) {
+        if (!spookyDuelsLocked && totalDiff > 15f) {
             // Нормализуем векторы направления
-            float[] current = toDirection(spookyCurrentYaw, spookyCurrentPitch);
-            float[] target = toDirection(spookyTargetYaw, spookyTargetPitch);
+            float[] current = toDirection(spookyDuelsCurrentYaw, spookyDuelsCurrentPitch);
+            float[] target = toDirection(spookyDuelsTargetYaw, spookyDuelsTargetPitch);
             
             // Вычисляем угол между векторами
             float dot = current[0] * target[0] + current[1] * target[1] + current[2] * target[2];
@@ -879,25 +925,169 @@ public class KillAura extends Module {
                 
                 // Преобразуем обратно в углы
                 float[] angles = toAngles(result);
-                spookyCurrentYaw = angles[0];
-                spookyCurrentPitch = angles[1];
+                spookyDuelsCurrentYaw = angles[0];
+                spookyDuelsCurrentPitch = angles[1];
             } else {
                 // Угол слишком мал, используем обычный lerp
-                spookyCurrentYaw += yawDelta * factor;
-                spookyCurrentPitch += pitchDelta * factor;
+                spookyDuelsCurrentYaw += yawDelta * factor;
+                spookyDuelsCurrentPitch += pitchDelta * factor;
             }
         } else {
             // Для малых углов или в locked режиме используем простой linear lerp
-            spookyCurrentYaw += yawDelta * factor;
-            spookyCurrentPitch += pitchDelta * factor;
+            spookyDuelsCurrentYaw += yawDelta * factor;
+            spookyDuelsCurrentPitch += pitchDelta * factor;
         }
 
-        spookyCurrentPitch = MathHelper.clamp(spookyCurrentPitch, -89f, 89f);
+        spookyDuelsCurrentPitch = MathHelper.clamp(spookyDuelsCurrentPitch, -89f, 89f);
 
         // ── GCD-фикс для соответствия серверным углам ──────────────────────
         float gcd = GCDFixer.getGCDValue();
-        float outYaw = spookyCurrentYaw - ((spookyCurrentYaw - lastYaw) % gcd);
-        float outPitch = spookyCurrentPitch - ((spookyCurrentPitch - lastPitch) % gcd);
+        float outYaw = spookyDuelsCurrentYaw - ((spookyDuelsCurrentYaw - lastYaw) % gcd);
+        float outPitch = spookyDuelsCurrentPitch - ((spookyDuelsCurrentPitch - lastPitch) % gcd);
+        outPitch = MathHelper.clamp(outPitch, -89f, 89f);
+
+        // Отправляем ротацию на сервер
+        RotationComponent.update(new Rotation(outYaw, outPitch),
+                360f, 45f, 45f, 45f, 0, 1, clientLook.getValue());
+
+        lastYaw = outYaw;
+        lastPitch = outPitch;
+    }
+
+    /**
+     * SpookyAnka per-frame: вызывается каждый кадр (60+ FPS).
+     * Копия SpookyDuels для отдельной настройки.
+     */
+    private void updateSpookyAnkaPerFrame() {
+        if (mc.player == null) return;
+        LivingEntity tgt = target != null ? target : lastTarget;
+        if (tgt == null || !tgt.isAlive()) {
+            spookyAnkaActive = false;
+            spookyAnkaLocked = false;
+            return;
+        }
+
+        long now = System.nanoTime();
+        if (spookyAnkaLastFrameNanos == 0L) {
+            spookyAnkaLastFrameNanos = now;
+            return;
+        }
+        float dt = (now - spookyAnkaLastFrameNanos) / 1_000_000_000f; // секунды
+        spookyAnkaLastFrameNanos = now;
+        if (dt <= 0f) return;
+        if (dt > 0.1f) dt = 0.1f; // защита от больших скачков
+
+        // ── Вычисляем целевую точку с предиктом каждый кадр ───────────────
+        Vec3d targetPos;
+        if (predictate.getValue() && tgt.isGliding()) {
+            targetPos = PredictUtils.predict(tgt, predictValue.getValue());
+        } else {
+            // Используем умное наведение если включено
+            if (smartAim.getValue()) {
+                targetPos = resolveMultipoint(tgt, BestPoint.getPoint2(tgt), distance.getValue());
+            } else {
+                targetPos = tgt.getBoundingBox().getCenter();
+            }
+        }
+
+        Vec3d playerEye = mc.player.getEyePos();
+        Vec3d delta = targetPos.subtract(playerEye);
+        
+        // Вычисляем базовые углы на центр цели
+        float pureYaw = (float) Math.toDegrees(Math.atan2(delta.z, delta.x)) - 90f;
+        float purePitch = (float) -Math.toDegrees(Math.atan2(delta.y, Math.hypot(delta.x, delta.z)));
+        purePitch = MathHelper.clamp(purePitch, -89f, 89f);
+
+        // ── Вычисляем расстояние до цели для определения режима ───────────
+        float yawDiff = Math.abs(MathHelper.wrapDegrees(pureYaw - spookyAnkaCurrentYaw));
+        float pitchDiff = Math.abs(purePitch - spookyAnkaCurrentPitch);
+        float totalDiff = (float) Math.sqrt(yawDiff * yawDiff + pitchDiff * pitchDiff);
+        
+        // ── Режим стабилизации: когда мы близко к цели ────────────────────
+        boolean wasLocked = spookyAnkaLocked;
+        if (totalDiff < 3f) {
+            spookyAnkaLocked = true;
+        } else if (totalDiff > 8f) {
+            spookyAnkaLocked = false;
+        }
+
+        // ── Круговое движение (орбита) вокруг цели ─────────────────────────
+        float orbitSpeed = spookyAnkaLocked ? 0.8f : 2.5f;
+        spookyAnkaOrbitPhase += orbitSpeed * dt;
+        
+        float orbitRadius = spookyAnkaLocked ? 0.8f : 3.5f;
+        
+        float orbitYawOffset = (float) Math.cos(spookyAnkaOrbitPhase) * orbitRadius;
+        float orbitPitchOffset = (float) Math.sin(spookyAnkaOrbitPhase * 1.3) * (orbitRadius * 0.4f);
+        
+        spookyAnkaTargetYaw = pureYaw + orbitYawOffset;
+        spookyAnkaTargetPitch = MathHelper.clamp(purePitch + orbitPitchOffset, -89f, 89f);
+
+        // ── Адаптивная скорость интерполяции ───────────────────────────────
+        boolean canAttackReady = Endless.getInstance().getIdealHitUtils().cooldownIsReached(false);
+        float baseSpeed;
+        
+        if (spookyAnkaLocked) {
+            if (canAttackReady && totalDiff < 2f) {
+                spookyAnkaTargetYaw = pureYaw;
+                spookyAnkaTargetPitch = purePitch;
+                baseSpeed = 35f;
+            } else {
+                baseSpeed = 12f;
+            }
+        } else {
+            if (totalDiff > 30f) {
+                baseSpeed = 35f;
+            } else if (totalDiff > 15f) {
+                baseSpeed = 25f;
+            } else {
+                baseSpeed = 18f;
+            }
+        }
+
+        // ── Frame-rate-independent interpolation ───────────────────────────
+        float factor = 1f - (float) Math.exp(-baseSpeed * dt);
+        
+        float yawDelta = MathHelper.wrapDegrees(spookyAnkaTargetYaw - spookyAnkaCurrentYaw);
+        float pitchDelta = spookyAnkaTargetPitch - spookyAnkaCurrentPitch;
+
+        // ── Spherical lerp (slerp) для больших углов ──────────────────────
+        if (!spookyAnkaLocked && totalDiff > 15f) {
+            float[] current = toDirection(spookyAnkaCurrentYaw, spookyAnkaCurrentPitch);
+            float[] target = toDirection(spookyAnkaTargetYaw, spookyAnkaTargetPitch);
+            
+            float dot = current[0] * target[0] + current[1] * target[1] + current[2] * target[2];
+            dot = MathHelper.clamp(dot, -1f, 1f);
+            float omega = (float) Math.acos(dot);
+            
+            if (omega > 0.01f) {
+                float sinOmega = (float) Math.sin(omega);
+                float a = (float) Math.sin((1f - factor) * omega) / sinOmega;
+                float b = (float) Math.sin(factor * omega) / sinOmega;
+                
+                float[] result = new float[3];
+                result[0] = a * current[0] + b * target[0];
+                result[1] = a * current[1] + b * target[1];
+                result[2] = a * current[2] + b * target[2];
+                
+                float[] angles = toAngles(result);
+                spookyAnkaCurrentYaw = angles[0];
+                spookyAnkaCurrentPitch = angles[1];
+            } else {
+                spookyAnkaCurrentYaw += yawDelta * factor;
+                spookyAnkaCurrentPitch += pitchDelta * factor;
+            }
+        } else {
+            spookyAnkaCurrentYaw += yawDelta * factor;
+            spookyAnkaCurrentPitch += pitchDelta * factor;
+        }
+
+        spookyAnkaCurrentPitch = MathHelper.clamp(spookyAnkaCurrentPitch, -89f, 89f);
+
+        // ── GCD-фикс для соответствия серверным углам ──────────────────────
+        float gcd = GCDFixer.getGCDValue();
+        float outYaw = spookyAnkaCurrentYaw - ((spookyAnkaCurrentYaw - lastYaw) % gcd);
+        float outPitch = spookyAnkaCurrentPitch - ((spookyAnkaCurrentPitch - lastPitch) % gcd);
         outPitch = MathHelper.clamp(outPitch, -89f, 89f);
 
         // Отправляем ротацию на сервер
@@ -1040,14 +1230,23 @@ public class KillAura extends Module {
         funtimeActive = false;
         funtimeLastFrameNanos = 0L;
 
-        // SpookyNew: сбрасываем per-frame state.
-        spookyCurrentYaw = mc.player != null ? mc.player.getYaw() : 0f;
-        spookyCurrentPitch = mc.player != null ? mc.player.getPitch() : 0f;
-        spookyPrevTarget = null;
-        spookyActive = false;
-        spookyLastFrameNanos = 0L;
-        spookyOrbitPhase = 0f;
-        spookyLocked = false;
+        // SpookyDuels: сбрасываем per-frame state.
+        spookyDuelsCurrentYaw = mc.player != null ? mc.player.getYaw() : 0f;
+        spookyDuelsCurrentPitch = mc.player != null ? mc.player.getPitch() : 0f;
+        spookyDuelsPrevTarget = null;
+        spookyDuelsActive = false;
+        spookyDuelsLastFrameNanos = 0L;
+        spookyDuelsOrbitPhase = 0f;
+        spookyDuelsLocked = false;
+
+        // SpookyAnka: сбрасываем per-frame state.
+        spookyAnkaCurrentYaw = mc.player != null ? mc.player.getYaw() : 0f;
+        spookyAnkaCurrentPitch = mc.player != null ? mc.player.getPitch() : 0f;
+        spookyAnkaPrevTarget = null;
+        spookyAnkaActive = false;
+        spookyAnkaLastFrameNanos = 0L;
+        spookyAnkaOrbitPhase = 0f;
+        spookyAnkaLocked = false;
 
         if (!renderListenerRegistered) {
             WorldRenderEvents.LAST.register(renderListener);
