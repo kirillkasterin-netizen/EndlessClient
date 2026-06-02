@@ -52,7 +52,7 @@ import dev.endless.util.text.ValueUnit;
 @ModuleInformation(moduleName = "KillAura", moduleCategory = ModuleCategory.COMBAT)
 public class KillAura extends Module {
 
-    public final ModeSetting rotation = new ModeSetting("Ротация", "Old SlothHW", "Old SlothHW", "Neuro", "Funtime");
+    public final ModeSetting rotation = new ModeSetting("Ротация", "Old SlothHW", "Old SlothHW", "Neuro", "Funtime", "SpookyNew");
     public final ModeSetting rotationBehavior = new ModeSetting("Поведение ротации", "Плавная", "Плавная", "Снапы");
     private final ModeListSetting targets = new ModeListSetting("Таргеты",
             new BooleanSetting("Игроки", true),
@@ -109,6 +109,21 @@ public class KillAura extends Module {
     private boolean funtimeActive = false;
     /** Прошлый кадр system time — для расчёта delta-time в frame-step. */
     private long funtimeLastFrameNanos = 0L;
+
+    // ── SpookyNew per-frame rotation state ────────────────────────────────
+    /** Текущие углы (обновляются каждый кадр). */
+    private float spookyCurrentYaw = 0f;
+    private float spookyCurrentPitch = 0f;
+    /** Целевые углы на центр цели. */
+    private float spookyTargetYaw = 0f;
+    private float spookyTargetPitch = 0f;
+    /** Прошлая цель для определения смены цели. */
+    private LivingEntity spookyPrevTarget = null;
+    /** Активна ли система SpookyNew. */
+    private boolean spookyActive = false;
+    /** Прошлый кадр system time для delta-time. */
+    private long spookyLastFrameNanos = 0L;
+
     @Getter
     private LivingEntity target;
     public static LivingEntity lastTarget;
@@ -132,6 +147,10 @@ public class KillAura extends Module {
         // Per-frame обновление Funtime ротации — плавное перемещение к целевому углу.
         if (isEnabled() && rotation.is("Funtime") && funtimeActive) {
             updateFuntimePerFrame();
+        }
+        // Per-frame обновление SpookyNew ротации.
+        if (isEnabled() && rotation.is("SpookyNew") && spookyActive) {
+            updateSpookyNewPerFrame();
         }
         // Лёгкая «доводка» камеры на последнюю цель после выключения KillAura.
         tickDisableTransition();
@@ -208,6 +227,7 @@ public class KillAura extends Module {
             case "Old SlothHW" -> slothTest(target);
             case "Neuro" -> updateNeuroRotation(target);
             case "Funtime" -> updateFuntimeRotation(target);
+            case "SpookyNew" -> updateSpookyNewRotation(target);
         }
     }
 
@@ -290,6 +310,9 @@ public class KillAura extends Module {
             // Funtime: цель потеряна, отключаем per-frame обновление.
             funtimeActive = false;
             funtimePrevTarget = null;
+            // SpookyNew: цель потеряна, отключаем per-frame обновление.
+            spookyActive = false;
+            spookyPrevTarget = null;
         }
     }
 
@@ -695,6 +718,181 @@ public class KillAura extends Module {
 
 
     /**
+     * SpookyNew ротация — onTick часть: активирует систему и готовит целевые углы.
+     */
+    private void updateSpookyNewRotation(LivingEntity target) {
+        if (mc.player == null || target == null) return;
+
+        spookyActive = true;
+
+        // Инициализация при первом тике
+        if (spookyCurrentYaw == 0 && spookyCurrentPitch == 0) {
+            spookyCurrentYaw = mc.player.getYaw();
+            spookyCurrentPitch = mc.player.getPitch();
+        }
+
+        // Смена цели — reset для плавного перехода
+        if (target != spookyPrevTarget) {
+            spookyPrevTarget = target;
+        }
+    }
+
+    /**
+     * SpookyNew per-frame: вызывается каждый кадр (60+ FPS).
+     * Использует плавную линейную интерполяцию (lerp) и сферическую (slerp)
+     * для очень быстрой, но плавной ротации.
+     * 
+     * Frame-rate-independent factor: 1 - exp(-speed * dt).
+     */
+    private void updateSpookyNewPerFrame() {
+        if (mc.player == null) return;
+        LivingEntity tgt = target != null ? target : lastTarget;
+        if (tgt == null || !tgt.isAlive()) {
+            spookyActive = false;
+            return;
+        }
+
+        long now = System.nanoTime();
+        if (spookyLastFrameNanos == 0L) {
+            spookyLastFrameNanos = now;
+            return;
+        }
+        float dt = (now - spookyLastFrameNanos) / 1_000_000_000f; // секунды
+        spookyLastFrameNanos = now;
+        if (dt <= 0f) return;
+        if (dt > 0.1f) dt = 0.1f; // защита от больших скачков
+
+        // ── Вычисляем целевую точку с предиктом каждый кадр ───────────────
+        Vec3d targetPos;
+        if (predictate.getValue() && tgt.isGliding()) {
+            targetPos = PredictUtils.predict(tgt, predictValue.getValue());
+        } else {
+            // Используем умное наведение если включено
+            if (smartAim.getValue()) {
+                targetPos = resolveMultipoint(tgt, BestPoint.getPoint2(tgt), distance.getValue());
+            } else {
+                targetPos = tgt.getBoundingBox().getCenter();
+            }
+        }
+
+        Vec3d playerEye = mc.player.getEyePos();
+        Vec3d delta = targetPos.subtract(playerEye);
+        
+        // Вычисляем целевые углы
+        spookyTargetYaw = (float) Math.toDegrees(Math.atan2(delta.z, delta.x)) - 90f;
+        spookyTargetPitch = (float) -Math.toDegrees(Math.atan2(delta.y, Math.hypot(delta.x, delta.z)));
+        spookyTargetPitch = MathHelper.clamp(spookyTargetPitch, -89f, 89f);
+
+        // ── Адаптивная скорость интерполяции ───────────────────────────────
+        // Очень быстрая базовая скорость с адаптацией под готовность атаки
+        boolean canAttackReady = Endless.getInstance().getIdealHitUtils().cooldownIsReached(false);
+        float baseSpeed = 28f; // Очень быстрая базовая скорость
+        
+        // Вычисляем расстояние до цели для адаптации скорости
+        float yawDiff = Math.abs(MathHelper.wrapDegrees(spookyTargetYaw - spookyCurrentYaw));
+        float pitchDiff = Math.abs(spookyTargetPitch - spookyCurrentPitch);
+        float totalDiff = (float) Math.sqrt(yawDiff * yawDiff + pitchDiff * pitchDiff);
+        
+        float lerpSpeed;
+        if (totalDiff > 30f) {
+            // Большое расстояние - максимальная скорость
+            lerpSpeed = baseSpeed * 1.5f;
+        } else if (totalDiff > 10f) {
+            // Среднее расстояние - базовая скорость
+            lerpSpeed = baseSpeed;
+        } else if (canAttackReady && totalDiff < 5f) {
+            // Близко к цели и готовы атаковать - точная доводка
+            lerpSpeed = baseSpeed * 1.8f;
+        } else {
+            // Близко к цели но не готовы - плавное удержание
+            lerpSpeed = baseSpeed * 0.85f;
+        }
+
+        // ── Frame-rate-independent linear lerp (для малых углов) ──────────
+        float factor = 1f - (float) Math.exp(-lerpSpeed * dt);
+        
+        // Linear interpolation для yaw
+        float yawDelta = MathHelper.wrapDegrees(spookyTargetYaw - spookyCurrentYaw);
+        float pitchDelta = spookyTargetPitch - spookyCurrentPitch;
+
+        // ── Spherical lerp (slerp) для больших углов ──────────────────────
+        // Используем slerp когда нужно повернуться на большой угол
+        if (totalDiff > 15f) {
+            // Нормализуем векторы направления
+            float[] current = toDirection(spookyCurrentYaw, spookyCurrentPitch);
+            float[] target = toDirection(spookyTargetYaw, spookyTargetPitch);
+            
+            // Вычисляем угол между векторами
+            float dot = current[0] * target[0] + current[1] * target[1] + current[2] * target[2];
+            dot = MathHelper.clamp(dot, -1f, 1f);
+            float omega = (float) Math.acos(dot);
+            
+            // Применяем slerp если угол значительный
+            if (omega > 0.01f) {
+                float sinOmega = (float) Math.sin(omega);
+                float a = (float) Math.sin((1f - factor) * omega) / sinOmega;
+                float b = (float) Math.sin(factor * omega) / sinOmega;
+                
+                float[] result = new float[3];
+                result[0] = a * current[0] + b * target[0];
+                result[1] = a * current[1] + b * target[1];
+                result[2] = a * current[2] + b * target[2];
+                
+                // Преобразуем обратно в углы
+                float[] angles = toAngles(result);
+                spookyCurrentYaw = angles[0];
+                spookyCurrentPitch = angles[1];
+            } else {
+                // Угол слишком мал, используем обычный lerp
+                spookyCurrentYaw += yawDelta * factor;
+                spookyCurrentPitch += pitchDelta * factor;
+            }
+        } else {
+            // Для малых углов используем простой linear lerp
+            spookyCurrentYaw += yawDelta * factor;
+            spookyCurrentPitch += pitchDelta * factor;
+        }
+
+        spookyCurrentPitch = MathHelper.clamp(spookyCurrentPitch, -89f, 89f);
+
+        // ── GCD-фикс для соответствия серверным углам ──────────────────────
+        float gcd = GCDFixer.getGCDValue();
+        float outYaw = spookyCurrentYaw - ((spookyCurrentYaw - lastYaw) % gcd);
+        float outPitch = spookyCurrentPitch - ((spookyCurrentPitch - lastPitch) % gcd);
+        outPitch = MathHelper.clamp(outPitch, -89f, 89f);
+
+        // Отправляем ротацию на сервер
+        RotationComponent.update(new Rotation(outYaw, outPitch),
+                360f, 45f, 45f, 45f, 0, 1, clientLook.getValue());
+
+        lastYaw = outYaw;
+        lastPitch = outPitch;
+    }
+
+    /**
+     * Преобразует углы (yaw, pitch) в единичный вектор направления.
+     */
+    private float[] toDirection(float yaw, float pitch) {
+        float yawRad = (float) Math.toRadians(yaw);
+        float pitchRad = (float) Math.toRadians(pitch);
+        float xz = (float) Math.cos(pitchRad);
+        return new float[]{
+            (float) (-Math.sin(yawRad) * xz),
+            (float) (-Math.sin(pitchRad)),
+            (float) (Math.cos(yawRad) * xz)
+        };
+    }
+
+    /**
+     * Преобразует единичный вектор направления обратно в углы (yaw, pitch).
+     */
+    private float[] toAngles(float[] direction) {
+        float yaw = (float) Math.toDegrees(Math.atan2(-direction[0], direction[2]));
+        float pitch = (float) Math.toDegrees(Math.asin(-direction[1]));
+        return new float[]{yaw, pitch};
+    }
+
+    /**
 //     * Neuro rotation — использует NeuroProfile, обученный через aim-тренажёр.
      */
     private void updateNeuroRotation(LivingEntity target) {
@@ -802,6 +1000,13 @@ public class KillAura extends Module {
         funtimeCurrentPitch = mc.player != null ? mc.player.getPitch() : 0f;
         funtimeActive = false;
         funtimeLastFrameNanos = 0L;
+
+        // SpookyNew: сбрасываем per-frame state.
+        spookyCurrentYaw = mc.player != null ? mc.player.getYaw() : 0f;
+        spookyCurrentPitch = mc.player != null ? mc.player.getPitch() : 0f;
+        spookyPrevTarget = null;
+        spookyActive = false;
+        spookyLastFrameNanos = 0L;
 
         if (!renderListenerRegistered) {
             WorldRenderEvents.LAST.register(renderListener);
