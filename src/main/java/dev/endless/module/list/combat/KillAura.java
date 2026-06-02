@@ -123,6 +123,10 @@ public class KillAura extends Module {
     private boolean spookyActive = false;
     /** Прошлый кадр system time для delta-time. */
     private long spookyLastFrameNanos = 0L;
+    /** Фаза кругового движения (радианы) для орбиты вокруг цели. */
+    private float spookyOrbitPhase = 0f;
+    /** Находимся ли мы близко к цели (режим стабилизации). */
+    private boolean spookyLocked = false;
 
     @Getter
     private LivingEntity target;
@@ -742,6 +746,9 @@ public class KillAura extends Module {
      * Использует плавную линейную интерполяцию (lerp) и сферическую (slerp)
      * для очень быстрой, но плавной ротации.
      * 
+     * Добавлены круговые движения головы (орбита) вокруг цели для более
+     * естественного вида, и режим стабилизации когда мы близко к цели.
+     * 
      * Frame-rate-independent factor: 1 - exp(-speed * dt).
      */
     private void updateSpookyNewPerFrame() {
@@ -749,6 +756,7 @@ public class KillAura extends Module {
         LivingEntity tgt = target != null ? target : lastTarget;
         if (tgt == null || !tgt.isAlive()) {
             spookyActive = false;
+            spookyLocked = false;
             return;
         }
 
@@ -778,46 +786,77 @@ public class KillAura extends Module {
         Vec3d playerEye = mc.player.getEyePos();
         Vec3d delta = targetPos.subtract(playerEye);
         
-        // Вычисляем целевые углы
-        spookyTargetYaw = (float) Math.toDegrees(Math.atan2(delta.z, delta.x)) - 90f;
-        spookyTargetPitch = (float) -Math.toDegrees(Math.atan2(delta.y, Math.hypot(delta.x, delta.z)));
-        spookyTargetPitch = MathHelper.clamp(spookyTargetPitch, -89f, 89f);
+        // Вычисляем базовые углы на центр цели
+        float pureYaw = (float) Math.toDegrees(Math.atan2(delta.z, delta.x)) - 90f;
+        float purePitch = (float) -Math.toDegrees(Math.atan2(delta.y, Math.hypot(delta.x, delta.z)));
+        purePitch = MathHelper.clamp(purePitch, -89f, 89f);
 
-        // ── Адаптивная скорость интерполяции ───────────────────────────────
-        // Очень быстрая базовая скорость с адаптацией под готовность атаки
-        boolean canAttackReady = Endless.getInstance().getIdealHitUtils().cooldownIsReached(false);
-        float baseSpeed = 28f; // Очень быстрая базовая скорость
-        
-        // Вычисляем расстояние до цели для адаптации скорости
-        float yawDiff = Math.abs(MathHelper.wrapDegrees(spookyTargetYaw - spookyCurrentYaw));
-        float pitchDiff = Math.abs(spookyTargetPitch - spookyCurrentPitch);
+        // ── Вычисляем расстояние до цели для определения режима ───────────
+        float yawDiff = Math.abs(MathHelper.wrapDegrees(pureYaw - spookyCurrentYaw));
+        float pitchDiff = Math.abs(purePitch - spookyCurrentPitch);
         float totalDiff = (float) Math.sqrt(yawDiff * yawDiff + pitchDiff * pitchDiff);
         
-        float lerpSpeed;
-        if (totalDiff > 30f) {
-            // Большое расстояние - максимальная скорость
-            lerpSpeed = baseSpeed * 1.5f;
-        } else if (totalDiff > 10f) {
-            // Среднее расстояние - базовая скорость
-            lerpSpeed = baseSpeed;
-        } else if (canAttackReady && totalDiff < 5f) {
-            // Близко к цели и готовы атаковать - точная доводка
-            lerpSpeed = baseSpeed * 1.8f;
+        // ── Режим стабилизации: когда мы близко к цели ────────────────────
+        // Если мы близко (< 3 градусов) - включаем режим "locked" с минимальным
+        // круговым движением для стабильности
+        boolean wasLocked = spookyLocked;
+        if (totalDiff < 3f) {
+            spookyLocked = true;
+        } else if (totalDiff > 8f) {
+            spookyLocked = false;
+        }
+        // Иначе сохраняем предыдущее состояние (гистерезис)
+
+        // ── Круговое движение (орбита) вокруг цели ─────────────────────────
+        // Фаза орбиты медленно растёт со временем
+        float orbitSpeed = spookyLocked ? 0.8f : 2.5f; // Медленнее когда locked
+        spookyOrbitPhase += orbitSpeed * dt;
+        
+        // Радиус орбиты зависит от режима
+        float orbitRadius = spookyLocked ? 0.8f : 3.5f; // Меньше когда locked
+        
+        // Добавляем круговое смещение к целевым углам
+        float orbitYawOffset = (float) Math.cos(spookyOrbitPhase) * orbitRadius;
+        float orbitPitchOffset = (float) Math.sin(spookyOrbitPhase * 1.3) * (orbitRadius * 0.4f);
+        
+        spookyTargetYaw = pureYaw + orbitYawOffset;
+        spookyTargetPitch = MathHelper.clamp(purePitch + orbitPitchOffset, -89f, 89f);
+
+        // ── Адаптивная скорость интерполяции ───────────────────────────────
+        boolean canAttackReady = Endless.getInstance().getIdealHitUtils().cooldownIsReached(false);
+        float baseSpeed;
+        
+        if (spookyLocked) {
+            // В режиме locked - медленная плавная стабилизация
+            if (canAttackReady && totalDiff < 2f) {
+                // Готовы атаковать и очень близко - финальный snap точно в центр
+                spookyTargetYaw = pureYaw; // Убираем орбиту для точного удара
+                spookyTargetPitch = purePitch;
+                baseSpeed = 35f;
+            } else {
+                baseSpeed = 12f; // Медленное следование по орбите
+            }
         } else {
-            // Близко к цели но не готовы - плавное удержание
-            lerpSpeed = baseSpeed * 0.85f;
+            // Быстрое приближение к цели
+            if (totalDiff > 30f) {
+                baseSpeed = 35f; // Максимальная скорость для больших расстояний
+            } else if (totalDiff > 15f) {
+                baseSpeed = 25f;
+            } else {
+                baseSpeed = 18f; // Замедляемся при приближении
+            }
         }
 
-        // ── Frame-rate-independent linear lerp (для малых углов) ──────────
-        float factor = 1f - (float) Math.exp(-lerpSpeed * dt);
+        // ── Frame-rate-independent interpolation ───────────────────────────
+        float factor = 1f - (float) Math.exp(-baseSpeed * dt);
         
-        // Linear interpolation для yaw
+        // Linear interpolation для yaw и pitch
         float yawDelta = MathHelper.wrapDegrees(spookyTargetYaw - spookyCurrentYaw);
         float pitchDelta = spookyTargetPitch - spookyCurrentPitch;
 
         // ── Spherical lerp (slerp) для больших углов ──────────────────────
-        // Используем slerp когда нужно повернуться на большой угол
-        if (totalDiff > 15f) {
+        // Используем slerp только когда НЕ в режиме locked и поворот большой
+        if (!spookyLocked && totalDiff > 15f) {
             // Нормализуем векторы направления
             float[] current = toDirection(spookyCurrentYaw, spookyCurrentPitch);
             float[] target = toDirection(spookyTargetYaw, spookyTargetPitch);
@@ -848,7 +887,7 @@ public class KillAura extends Module {
                 spookyCurrentPitch += pitchDelta * factor;
             }
         } else {
-            // Для малых углов используем простой linear lerp
+            // Для малых углов или в locked режиме используем простой linear lerp
             spookyCurrentYaw += yawDelta * factor;
             spookyCurrentPitch += pitchDelta * factor;
         }
@@ -1007,6 +1046,8 @@ public class KillAura extends Module {
         spookyPrevTarget = null;
         spookyActive = false;
         spookyLastFrameNanos = 0L;
+        spookyOrbitPhase = 0f;
+        spookyLocked = false;
 
         if (!renderListenerRegistered) {
             WorldRenderEvents.LAST.register(renderListener);
